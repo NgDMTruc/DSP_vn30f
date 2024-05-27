@@ -16,6 +16,8 @@ ohlc_dict = {
 
 def run():
     data = get_vn30f(start_time, now_time, symbol)
+
+    
     print(data.head())
 
 if __name__ == "__main__":

@@ -24,3 +24,23 @@ def get_vn30f(start_time, now_time, symbol):
     print(f'===> Data {symbol} from {dt_object} to {now_time} has been appended ')
     
     return vn30fm
+
+def split_data(data):
+    """
+    Hàm này chia dữ liệu thành 2 phần: tập huấn luyện và tập hold out.
+
+    Args:
+    data (pandas.DataFrame): DataFrame chứa dữ liệu cần chia.
+
+    Returns:
+    pandas.DataFrame: DataFrame chứa dữ liệu tập huấn luyện.
+    pandas.DataFrame: DataFrame chứa dữ liệu tập giữ lại.
+    """
+    # Chia dữ liệu thành 3 phần
+    new_part = np.array_split(data, 3)
+
+    # Access each part individually
+    hold_out = new_part[2]
+    train_data = pd.concat([new_part[0], new_part[1]], axis=0)
+
+    return train_data, hold_out
