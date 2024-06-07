@@ -3,6 +3,7 @@
 
 # Ignore PKL files
 *.pkl
+*.json
 
 # Optional: Ignore other common data and environment files
 *.log
