@@ -110,9 +110,46 @@ def get_vn30f(start_time, now_time, symbol):
 
     return vn30fm
 
+def get_vn30f_ver2(start_time, now_time, symbol):
+    def vn30f():
+            return requests.get(f"https://services.entrade.com.vn/chart-api/v2/ohlcs/index?from={start_time}&to={now_time}&symbol=VN30&resolution=1").json()
+    vn30fm = pd.DataFrame(vn30f()).iloc[:,:6]
+    vn30fm['t'] = vn30fm['t'].astype(int).apply(lambda x: datetime.utcfromtimestamp(x) + timedelta(hours = 7))
+    vn30fm.columns = ['Date','Open','High','Low','Close','Volume']
+    ohlc_dict = {
+        'Open': 'first',
+        'High': 'max',
+        'Low': 'min',
+        'Close': 'last',
+        'Volume': 'sum',}
+    vn30fm = pd.DataFrame(vn30f()).iloc[:,:6]
+    vn30fm['t'] = vn30fm['t'].astype(int).apply(lambda x: datetime.utcfromtimestamp(x) + timedelta(hours = 7))
+    vn30fm.columns = ['Date','Open','High','Low','Close','Volume']
+    dt_object = datetime.utcfromtimestamp(start_time) + timedelta(hours = 7)
+    now_object = datetime.utcfromtimestamp(now_time) + timedelta(hours = 7)
+
+    print(f'===> Data {symbol} from {dt_object} to {now_object} has been appended ')
+
+    return vn30fm
+
 df = get_vn30f(start_time, now_time, symbol)
+df_2 =get_vn30f_ver2(start_time, now_time, symbol)
 
 data = df.copy()
+data1= df_2.copy()
+
+combined_data = pd.merge(data, data1, on='Date', how='outer', suffixes=('', '_data1'))
+
+for column in ['Open', 'High', 'Low', 'Close', 'Volume']:
+    combined_data[column].fillna(combined_data[f'{column}_data1'], inplace=True)
+
+combined_data.drop(columns=[f'{column}_data1' for column in ['Open', 'High', 'Low', 'Close', 'Volume']], inplace=True)
+
+combined_data.sort_values('Date', inplace=True)
+
+combined_data.reset_index(drop=True, inplace=True)
+
+data=combined_data
 
 """## Preprocess"""
 
@@ -224,5 +261,5 @@ def drop_high_corr_columns(df, threshold=0.6):
 
 data = drop_high_corr_columns(data)
 
-data.to_csv('save_data.csv')
+data.to_csv('save_data.csv', index=False)
 
