@@ -212,7 +212,7 @@ data = pd.read_csv('save_data.csv')
 train_data, hold_out = split_data(data)
 
 #restored_sampler = pickle.load(open("1000model.pkl", "rb"))
-study = joblib.load(open("rabmodel.pkl", "rb"))
+study = joblib.load(open("abmodel.pkl", "rb"))
 
 # Retrieve all trials
 trials = study.trials

@@ -199,7 +199,7 @@ unique_trials = 50
 while unique_trials > len(set(str(t.params) for t in study.trials)):
     study.optimize(lambda trial: objective(trial, X_train, X_valid, y_train, y_valid, train_data['Close']), n_trials=1)
     study.trials_dataframe().sort_values('values_0').to_csv('feature_trials.csv')
-    joblib.dump(study, 'rabmodel.pkl')
+    joblib.dump(study, 'abmodel.pkl')
 
 trials = study.trials
 trials.sort(key=lambda trial: trial.values, reverse=True)
@@ -207,4 +207,4 @@ study.trials_dataframe().sort_values('values_0', ascending=False).duplicated().s
 
 """## Checking part for fixing bug"""
 df =study.trials_dataframe()
-df.to_csv('feature_trials_ridge.csv')
+df.to_csv('feature_trials.csv')

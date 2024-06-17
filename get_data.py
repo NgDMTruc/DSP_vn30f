@@ -172,7 +172,6 @@ def process_data(data):
 
 data = process_data(data)
 
-data
 
 """## Create features"""
 
