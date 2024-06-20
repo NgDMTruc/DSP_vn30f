@@ -1,4 +1,11 @@
 from datetime import datetime, timedelta, timezone
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from datetime import datetime, timedelta
+from ta import add_all_ta_features
+from vnstock import stock_historical_data
+
+import pandas_ta as ta
 import pandas as pd
 import numpy as np
 import requests
@@ -6,11 +13,6 @@ import os
 import optuna
 import logging
 import sys
-
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from datetime import datetime, timedelta
-from ta import add_all_ta_features
 
 """## Variables"""
 
@@ -21,11 +23,6 @@ start_time = 0
 now_time = 9999999999
 symbol = 'VN30F1M'
 rolling_window = 1 # Số phút muốn dự đoán tiếp theo
-
-# Add stream handler of stdout to show the messages
-optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
-study_name = "btc1-study"  # Unique identifier of the study.
-storage_name = "sqlite:///{}.db".format(study_name)
 
 """# Function for data"""
 
@@ -133,17 +130,56 @@ def get_vn30f_ver2(start_time, now_time, symbol):
     return vn30fm
 
 df = get_vn30f(start_time, now_time, symbol)
-df_2 =get_vn30f_ver2(start_time, now_time, symbol)
+df2 = stock_historical_data("VN30F1M", "2023-04-01", "2023-07-31", "3", 'derivative')
+temp = df2.drop(columns=['ticker'])
+temp['time'] = pd.to_datetime(temp['time'])
 
-data = df.copy()
-data1= df_2.copy()
 
-combined_data = pd.merge(data, data1, on='Date', how='outer', suffixes=('', '_data1'))
+morning_start = pd.Timestamp('09:00:00').time()
+morning_end = pd.Timestamp('11:30:00').time()
+afternoon_start = pd.Timestamp('13:00:00').time()
+afternoon_end = pd.Timestamp('14:30:00').time()
+ATC= pd.Timestamp('14:45:00').time()
+
+time_points = []
+current_time = morning_start
+
+while current_time <= morning_end:
+    time_points.append(current_time)
+    current_time = (pd.Timestamp.combine(pd.Timestamp.today(), current_time) + pd.Timedelta(minutes=1)).time()
+
+current_time = afternoon_start
+while current_time <= afternoon_end:
+    time_points.append(current_time)
+    current_time = (pd.Timestamp.combine(pd.Timestamp.today(), current_time) + pd.Timedelta(minutes=1)).time()
+current_time= ATC
+while current_time == ATC:
+    time_points.append(current_time)
+    current_time = (pd.Timestamp.combine(pd.Timestamp.today(), current_time) + pd.Timedelta(minutes=1)).time()
+
+temp = temp.set_index('time')
+df_resampled = temp.resample('1T').first().reindex(pd.date_range(start=temp.index[0], end=temp.index[-1], freq='1T')).ffill()
+
+df_resampled = df_resampled.reset_index().rename(columns={'index': 'time'})
+temp = temp.reset_index().rename(columns={'index': 'time'})
+
+df_resampled = df_resampled[df_resampled['time'].dt.time.isin(time_points)]
+df_resampled  =df_resampled .rename(columns={
+    'time': 'Date',
+    'open': 'Open',
+    'high': 'High',
+    'low': 'Low',
+    'close': 'Close',
+    'volume': 'Volume'
+})
+
+combined_data = pd.merge(df, df_resampled, on='Date', how='outer', suffixes=('', '_data1'))
 
 for column in ['Open', 'High', 'Low', 'Close', 'Volume']:
     combined_data[column].fillna(combined_data[f'{column}_data1'], inplace=True)
 
 combined_data.drop(columns=[f'{column}_data1' for column in ['Open', 'High', 'Low', 'Close', 'Volume']], inplace=True)
+
 
 combined_data.sort_values('Date', inplace=True)
 
@@ -175,7 +211,14 @@ data = process_data(data)
 
 """## Create features"""
 
-def generate_features(df, shift=1):
+def z_score_rolling(series, window=30):
+    """Tính Z-score rolling"""
+    mean = series.rolling(window).mean()
+    std = series.rolling(window).std(ddof=0)
+    z_score = (series - mean) / std
+    return z_score
+
+def generate_features(data, shift=1):
     """
     Hàm này tạo ra các features mới từ dữ liệu cổ phiếu.
 
@@ -185,40 +228,67 @@ def generate_features(df, shift=1):
     Returns:
     pandas.DataFrame: DataFrame đã được mở rộng với các features mới.
     """
-
+    df = data.copy()
     # Thêm tất cả các đặc trưng kỹ thuật từ thư viện TA-Lib
-    df_shift = df.shift(shift)
-    df_shift = add_all_ta_features(df_shift, open="Open", high="High", low="Low", close="Close", volume="Volume")
+    # Bollinger Bands
+    df['BB_Middle'] = df['Close'].rolling(window=20).mean()
+    df['BB_Std'] = df['Close'].rolling(window=20).std()
+    df['BB_Upper'] = df['BB_Middle'] + 2 * df['BB_Std']
+    df['BB_Lower'] = df['BB_Middle'] - 2 * df['BB_Std']
 
-    # Drop the original OHLCV columns from the shifted DataFrame
-    df_shift = df_shift.drop(columns=['Date','time', 'Open','High','Low','Close','Volume'])
+    # RSI
+    df['RSI'] = ta.rsi(df['Close'], length=14)
 
-    df = pd.concat([df, df_shift], axis=1)
+    # MACD
+    macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
+    df['MACD'] = macd['MACD_12_26_9']
+    df['MACD_Signal'] = macd['MACDs_12_26_9']
+    df['MACD_Hist'] = macd['MACDh_12_26_9']
 
-    ### Ví dụ các features thêm tay
-    # Tính phần trăm thay đổi của giá đóng cửa trong 5 phút
-    df['Trend_5min'] = df['Close'].shift(shift).pct_change(periods=5)
+    # Stochastic Oscillator
+    stoch = ta.stoch(df['High'], df['Low'], df['Close'])
+    df['Stoch_K'] = stoch['STOCHk_14_3_3']
+    df['Stoch_D'] = stoch['STOCHd_14_3_3']
 
-    # Tính độ lệch chuẩn của giá đóng cửa trong 30 phút
-    df['Std_Rolling_30min'] = df['Close'].shift(shift).rolling(window=30, min_periods=1).std()
+    # ATR
+    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
-    # Tính độ lệch của giá đóng cửa so với trung bình động 30 phút
-    ma_30min = df['Close'].shift(shift).rolling(window=30, min_periods=1).mean()
-    df['Close_Minus_MA_30min'] = df['Close'].shift(shift) - ma_30min
+    # Z-score rolling
+    df['Z_Score_Rolling'] = z_score_rolling(df['Close'], window=30)
 
-    # Tính trung bình động 10 phút của giá đóng cửa
-    df['SMA_10'] = df['Close'].shift(shift).rolling(window=10, min_periods=1).mean()
+    # Percent Change 5 minutes
+    df['Trend_5min'] = df['Close'].pct_change(periods=5)
 
-    # Identify numeric columns
-    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    # Rolling Standard Deviation 30 minutes
+    df['Std_Rolling_30min'] = df['Close'].rolling(window=30).std()
 
-    # Replace infinite values with NaN in numeric columns
-    df[numeric_cols] = df[numeric_cols].replace([np.inf, -np.inf], np.nan)
+    # Difference between Close and 30 minutes Moving Average
+    ma_30min = df['Close'].rolling(window=30).mean()
+    df['Close_Minus_MA_30min'] = df['Close'] - ma_30min
 
-    # Điền các giá trị NaN với 0
-    df = df.fillna(0)
+    # Simple Moving Average 10 minutes
+    df['SMA_10'] = df['Close'].rolling(window=10).mean()
 
-    return df
+    df_ta = df.copy()
+    df_ta.ta.strategy('all')
+
+    cols_to_drop = ['Open', 'High', 'Low', 'Close', 'Volume', 'Date', 'time']
+    df_ta = df_ta.drop(columns=cols_to_drop, errors='ignore')
+
+    # Concatenate original dataframe with features from pandas-ta
+    df = pd.concat([df, df_ta], axis=1)
+
+    # Replace infinite values and fill NaN values with 0
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    df.fillna(0, inplace=True)
+
+    df2 = data.copy()
+    df2 = add_all_ta_features(df2, open="Open", high="High", low="Low", close="Close", volume="Volume")
+    df2 = df2.drop(columns=['Date','time', 'Open','High','Low','Close','Volume'])
+
+    df3 = pd.concat([df, df2], axis=1)
+
+    return df3
 
 data  = generate_features(data)
 
