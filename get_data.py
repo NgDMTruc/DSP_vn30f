@@ -10,9 +10,7 @@ import pandas as pd
 import numpy as np
 import requests
 import os
-import optuna
-import logging
-import sys
+
 
 """## Variables"""
 
@@ -28,6 +26,9 @@ rolling_window = 1 # Số phút muốn dự đoán tiếp theo
 
 def scale_data(data):
     scaler = StandardScaler()
+    data = np.where(np.isinf(data), np.nan, data)
+    data = pd.DataFrame(data)
+    data = data.fillna(0)
     scaler.fit(data)
     data=pd.DataFrame(scaler.transform(data), index=data.index, columns=data.columns)
 
@@ -107,39 +108,17 @@ def get_vn30f(start_time, now_time, symbol):
 
     return vn30fm
 
-def get_vn30f_ver2(start_time, now_time, symbol):
-    def vn30f():
-            return requests.get(f"https://services.entrade.com.vn/chart-api/v2/ohlcs/index?from={start_time}&to={now_time}&symbol=VN30&resolution=1").json()
-    vn30fm = pd.DataFrame(vn30f()).iloc[:,:6]
-    vn30fm['t'] = vn30fm['t'].astype(int).apply(lambda x: datetime.utcfromtimestamp(x) + timedelta(hours = 7))
-    vn30fm.columns = ['Date','Open','High','Low','Close','Volume']
-    ohlc_dict = {
-        'Open': 'first',
-        'High': 'max',
-        'Low': 'min',
-        'Close': 'last',
-        'Volume': 'sum',}
-    vn30fm = pd.DataFrame(vn30f()).iloc[:,:6]
-    vn30fm['t'] = vn30fm['t'].astype(int).apply(lambda x: datetime.utcfromtimestamp(x) + timedelta(hours = 7))
-    vn30fm.columns = ['Date','Open','High','Low','Close','Volume']
-    dt_object = datetime.utcfromtimestamp(start_time) + timedelta(hours = 7)
-    now_object = datetime.utcfromtimestamp(now_time) + timedelta(hours = 7)
-
-    print(f'===> Data {symbol} from {dt_object} to {now_object} has been appended ')
-
-    return vn30fm
-
 df = get_vn30f(start_time, now_time, symbol)
 df2 = stock_historical_data("VN30F1M", "2023-04-01", "2023-07-31", "3", 'derivative')
 temp = df2.drop(columns=['ticker'])
-temp['time'] = pd.to_datetime(temp['time'])
 
+temp['time'] = pd.to_datetime(temp['time'])
 
 morning_start = pd.Timestamp('09:00:00').time()
 morning_end = pd.Timestamp('11:30:00').time()
 afternoon_start = pd.Timestamp('13:00:00').time()
 afternoon_end = pd.Timestamp('14:30:00').time()
-ATC= pd.Timestamp('14:45:00').time()
+ATC = pd.Timestamp('14:45:00').time()
 
 time_points = []
 current_time = morning_start
@@ -152,7 +131,8 @@ current_time = afternoon_start
 while current_time <= afternoon_end:
     time_points.append(current_time)
     current_time = (pd.Timestamp.combine(pd.Timestamp.today(), current_time) + pd.Timedelta(minutes=1)).time()
-current_time= ATC
+
+current_time = ATC
 while current_time == ATC:
     time_points.append(current_time)
     current_time = (pd.Timestamp.combine(pd.Timestamp.today(), current_time) + pd.Timedelta(minutes=1)).time()
@@ -164,7 +144,7 @@ df_resampled = df_resampled.reset_index().rename(columns={'index': 'time'})
 temp = temp.reset_index().rename(columns={'index': 'time'})
 
 df_resampled = df_resampled[df_resampled['time'].dt.time.isin(time_points)]
-df_resampled  =df_resampled .rename(columns={
+df_resampled = df_resampled.rename(columns={
     'time': 'Date',
     'open': 'Open',
     'high': 'High',
@@ -172,6 +152,12 @@ df_resampled  =df_resampled .rename(columns={
     'close': 'Close',
     'volume': 'Volume'
 })
+
+# Divide the Volume column by 3 and round to the nearest integer
+df_resampled['Volume'] = df_resampled.apply(
+    lambda row: round(row['Volume'] / 3) if row['Date'].time() < pd.Timestamp('14:30:00').time() else row['Volume'],
+    axis=1
+)
 
 combined_data = pd.merge(df, df_resampled, on='Date', how='outer', suffixes=('', '_data1'))
 
@@ -191,7 +177,7 @@ data=combined_data
 
 from scipy.stats.mstats import winsorize
 # Áp dụng Winsorization
-#data['Close'] = winsorize(data['Close'], limits=[0.05, 0.05])
+data['Close'] = winsorize(data['Close'], limits=[0.05, 0.05])
 
 def process_data(data):
     data.set_index('Date', inplace =True)
@@ -270,7 +256,8 @@ def generate_features(data, shift=1):
     df['SMA_10'] = df['Close'].rolling(window=10).mean()
 
     df_ta = df.copy()
-    df_ta.ta.strategy('all')
+    df_ta.ta.cores = 0
+    df_ta.ta.strategy('common')
 
     cols_to_drop = ['Open', 'High', 'Low', 'Close', 'Volume', 'Date', 'time']
     df_ta = df_ta.drop(columns=cols_to_drop, errors='ignore')
@@ -292,14 +279,6 @@ def generate_features(data, shift=1):
 
 data  = generate_features(data)
 
-"""Thêm các feature khác, ví dụ giá vàng (xem xét phù hợp với thời gian trong data)
-
-# Add Predict Features
-"""
-
-data['Return'] = (data['Close'].shift(-rolling_window) - data['Close'])/data['Close']
-data = data.fillna(0)
-data = data.drop(index=0)
 
 """# Feature Engineering"""
 from sklearn.linear_model import *
@@ -329,6 +308,12 @@ def drop_high_corr_columns(df, threshold=0.6):
     return df_dropped
 
 data = drop_high_corr_columns(data)
+
+# Add Predict Features
+
+data['Return'] = (data['Close'].shift(-rolling_window) - data['Close'])/data['Close']
+data = data.fillna(0)
+data = data.drop(index=0)
 
 data.to_csv('save_data.csv', index=False)
 

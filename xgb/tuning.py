@@ -163,7 +163,7 @@ def sharpe_for_vn30f(y_pred, y_price, trade_threshold, fee_perc, periods):
     pnl = np.cumsum(pnl)
 
     # Standardalize PNL to date
-    daily_pnl = [pnl.iloc[i] for i in range(0, len(pnl), 24)]
+    daily_pnl = [pnl.iloc[i] for i in range(0, len(pnl), 241)]
     daily_pnl = pd.Series(daily_pnl).fillna(0)
 
     # Calculate Sharpe
@@ -185,6 +185,9 @@ def calculate_hitrate(pos_predict, pos_true):
 
 def scale_data(data):
     scaler = StandardScaler()
+    data = np.where(np.isinf(data), np.nan, data)
+    data = pd.DataFrame(data)
+    data = data.fillna(0)
     scaler.fit(data)
     data=pd.DataFrame(scaler.transform(data), index=data.index, columns=data.columns)
 
@@ -211,119 +214,8 @@ data = pd.read_csv('save_data.csv')
 
 train_data, hold_out = split_data(data)
 
-#restored_sampler = pickle.load(open("1000model.pkl", "rb"))
-study = joblib.load(open("abmodel.pkl", "rb"))
-
-# Retrieve all trials
-trials = study.trials
-
-# Sort trials based on objective values
-trials.sort(key=lambda trial: trial.values, reverse=True)
-
-# Define top pnl to take for clustering
-top_trials = trials[:100]
-
-new_df_no_close_col = data.drop(['Date','time', 'Open','High','Low','Close','Volume', 'Return'], axis=1)
-
-# Extract hyperparameters from top trials
-top_features_list = []
-
-for trial in top_trials:
-  best_selected_features = [col for col in new_df_no_close_col.columns if trial.params[col] == 1]
-  top_features_list.append(best_selected_features)
-
-top_pnl = []
-trade_threshold  = 0.005
-
-for best_selected_features in top_features_list:
-
-    new_df_selected = data[['Close', 'Return']+best_selected_features]
-    train_select_col_data, _ = split_data(new_df_selected)
-
-    retrain_data = train_select_col_data.drop(['Close', 'Return'], axis=1)
-    retrain_data = scale_data(retrain_data)
-
-    X_train, X_valid, y_train, y_valid = train_test_split(retrain_data,
-                                                      train_select_col_data['Return'],
-                                                      test_size=0.5,shuffle=False)
-
-    # Create and train model
-    model = xgb.XGBRegressor()
-    model.fit(X_train, y_train)
-
-    # Make predictions
-    y_pred_valid = model.predict(X_valid)
-    _, pnl_valid, _, _ = sharpe_for_vn30f(y_pred_valid, y_valid, trade_threshold=trade_threshold, fee_perc=0.01, periods=10)
-    pnl_valid_no_nan = np.nan_to_num(pnl_valid, nan=0)
-    top_pnl.append(pnl_valid_no_nan)
-
-# FREQUENCY FEATURE TABLE
-correlation_matrix = np.corrcoef(top_pnl)
-corr = pd.DataFrame(correlation_matrix)
-
-corrNew, clstrsNew, silhNew = clusterKMeansTop(corr)
-
-for cluster_number, cluster_indices in clstrsNew.items():
-    print(f"Cluster {cluster_number}:")
-    for idx in cluster_indices:
-        trial_number = top_trials[idx].number
-        trial_params = top_trials[idx].params
-    #     print(f"- Trial {trial_number}: {trial_params}")
-    # print()
-
-cluster_frequencies = []
-
-for cluster_number, cluster_indices in clstrsNew.items():
-    cluster_frequency = {}
-
-    for idx in cluster_indices:
-        trial_features = top_trials[idx].number
-        trial_params = top_trials[idx].params
-        for key, value in trial_params.items():
-            if value == 1:
-                cluster_frequency[key] = cluster_frequency.get(key, 0) + 1
-
-    sorted_frequency = sorted(cluster_frequency.items(), key=lambda x: x[1],  reverse=True)
-
-
-    top_features = sorted_frequency[:10]
-    df = pd.DataFrame(top_features, columns=['Feature', 'Frequency'])
-
-cluster_lists = []
-
-# Iterate through each cluster and its members
-for cluster_number, cluster_indices in clstrsNew.items():
-    cluster_list = []
-
-    # Iterate through each index in the cluster
-    for idx in cluster_indices:
-        trial_number = top_trials[idx].number
-        cluster_list.append(trial_number)
-
-    cluster_lists.append(cluster_list)
-
-top_10_features_per_cluster = []
-
-for cluster_number, cluster_indices in clstrsNew.items():
-    cluster_frequency = {}
-
-    for idx in cluster_indices:
-        trial_params = top_trials[idx].params
-        for key, value in trial_params.items():
-            if value == 1:
-                cluster_frequency[key] = cluster_frequency.get(key, 0) + 1
-
-    sorted_cluster_frequency = sorted(cluster_frequency.items(), key=lambda x: x[1], reverse=True)
-    top_10_features_cluster = [feature for feature, _ in sorted_cluster_frequency[:10]]
-    top_10_features_per_cluster.append(top_10_features_cluster)
-
-top10_feat = pd.DataFrame(top_10_features_per_cluster)
-top10_feat.to_csv('top_10_features.csv')
-
-selected_columns_cluster = []
-for item in top_10_features_per_cluster:
-  selected_columns = new_df_no_close_col.loc[:, item]
-  selected_columns_cluster.append(selected_columns)
+with open('top_10_list.pkl', 'rb') as f:
+    selected_columns_cluster = pickle.load(f)
 
 min_delta = 0.0001
 patience = 30
@@ -374,6 +266,8 @@ def objective_params(trial, X_train, X_valid, y_train, y_valid, y_close):
     for t in trial.study.trials:
         if t.state != optuna.trial.TrialState.COMPLETE:
             continue
+        if t.params == trial.params:
+            return None #t.values  # Return the previous value without re-evaluating i
 
     custom_early_stopping_instance = CustomEarlyStopping(min_delta=min_delta, patience=patience, verbose=True)
 
@@ -383,7 +277,6 @@ def objective_params(trial, X_train, X_valid, y_train, y_valid, y_close):
 
     y_pred_train = model.predict(X_train)
     y_pred_valid = model.predict(X_valid)
-
 
     pos, pnl, daily_pnl, sharpe_is = sharpe_for_vn30f(y_pred_train, y_close[:len(y_pred_train)], trade_threshold=trade_threshold, fee_perc=0.01, periods=10)
     _, _, _, sharpe_oos = sharpe_for_vn30f(y_pred_valid, y_close[len(y_pred_train):], trade_threshold=trade_threshold, fee_perc=0.01, periods=10)
@@ -404,17 +297,19 @@ for idx, data_item in enumerate(selected_columns_cluster):
     unique_trials = 10
     while unique_trials > len(set(str(t.params) for t in study.trials)):
         study.optimize(lambda trial: objective_params(trial, X_train, X_valid, y_train, y_valid, train_data['Close']), n_trials=1)
-        study.trials_dataframe().sort_values('values_0').to_csv('hypertuning.csv')
+        study.trials_dataframe().sort_values('values_0').to_csv(f'hypertuning{idx}.csv')
         joblib.dump(study, f'{unique_trials}hypertuningcluster{idx}.pkl')
 
     # Retrieve all trials
     trials = study.trials
 
+    completed_trials = [t for t in study.trials if t.values is not None]
+
     # Sort trials based on objective values
-    trials.sort(key=lambda trial: trial.values, reverse=True)
+    completed_trials.sort(key=lambda trial: trial.values, reverse=True)
 
     # Select top 1 trials
-    params = trials[0].params
+    params = completed_trials[0].params
     best_params_list.append(params)
 
     model = xgb.XGBRegressor(**params)

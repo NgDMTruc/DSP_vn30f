@@ -28,7 +28,7 @@ storage_name = "sqlite:///{}.db".format(study_name)
 
 """## Formulas"""
 
-def choose_position(roi, trade_threshold = 0.0005):
+def choose_position(roi, trade_threshold = 0.0001):
     pos =0
     # Predict position base on change in future
     if roi > trade_threshold:
@@ -74,7 +74,7 @@ def sharpe_for_vn30f(y_pred, y_price, trade_threshold, fee_perc, periods):
     pnl = np.cumsum(pnl)
 
     # Standardalize PNL to date
-    daily_pnl = [pnl.iloc[i] for i in range(0, len(pnl), 24)]
+    daily_pnl = [pnl.iloc[i] for i in range(0, len(pnl), 241)]
     daily_pnl = pd.Series(daily_pnl).fillna(0)
 
     # Calculate Sharpe
@@ -98,6 +98,9 @@ def calculate_hitrate(pos_predict, pos_true):
 
 def scale_data(data):
     scaler = StandardScaler()
+    data = np.where(np.isinf(data), np.nan, data)
+    data = pd.DataFrame(data)
+    data = data.fillna(0)
     scaler.fit(data)
     data=pd.DataFrame(scaler.transform(data), index=data.index, columns=data.columns)
 
@@ -159,15 +162,27 @@ def objective(trial, X_train, X_valid, y_train, y_valid, y_price):
 
     # Select features based on Optuna's suggestions
     selected_features = []
+
+    at_least_one_feature = False
+
     for col in X_train.columns:
-        if trial.suggest_categorical(col, [0, 1]):
+        select_feature = trial.suggest_categorical(col, [0, 1])
+        if select_feature:
             selected_features.append(col)
+            at_least_one_feature = True
+
+    # If no feature was selected, force selection of at least one feature
+    if not at_least_one_feature:
+        # Randomly select one feature to be included
+        forced_feature = trial.suggest_categorical('forced_feature', X_train.columns.tolist())
+        selected_features.append(forced_feature)
 
     for t in trial.study.trials:
         if t.state != optuna.trial.TrialState.COMPLETE:
             continue
+        if t.params == trial.params:
+            return None # t.values  # Return the previous value without re-evaluating i
 
-    # trade_threshold = trial.suggest_float('trade_threshold', 0.008, 0.08, step=0.0004)
     trade_threshold  = 0.0001
 
     # Use only the selected features in training
@@ -189,22 +204,13 @@ def objective(trial, X_train, X_valid, y_train, y_valid, y_price):
     return sharpe_oos, abs((abs(sharpe_is / sharpe_oos))-1)
 
 X_train, X_valid, y_train, y_valid, train_data = split_optuna_data(data)
-
 """## Define number of trials (no 2)"""
 
 # Create a study object and optimize the objective function
 study = optuna.create_study(directions=['maximize', 'minimize'])
-unique_trials = 50
+unique_trials = 200
 
 while unique_trials > len(set(str(t.params) for t in study.trials)):
     study.optimize(lambda trial: objective(trial, X_train, X_valid, y_train, y_valid, train_data['Close']), n_trials=1)
-    study.trials_dataframe().sort_values('values_0').to_csv('feature_trials.csv')
-    joblib.dump(study, 'abmodel.pkl')
-
-trials = study.trials
-trials.sort(key=lambda trial: trial.values, reverse=True)
-study.trials_dataframe().sort_values('values_0', ascending=False).duplicated().sum()
-
-"""## Checking part for fixing bug"""
-df =study.trials_dataframe()
-df.to_csv('feature_trials.csv')
+    study.trials_dataframe().sort_values('values_0').to_csv('xgb_feature_trials.csv')
+    joblib.dump(study, 'xgbmodel.pkl')
