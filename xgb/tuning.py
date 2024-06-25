@@ -294,7 +294,7 @@ for idx, data_item in enumerate(selected_columns_cluster):
                                                             shuffle=False)
     study = optuna.create_study(directions=['maximize', 'minimize'])
 
-    unique_trials = 10
+    unique_trials = 5
     while unique_trials > len(set(str(t.params) for t in study.trials)):
         study.optimize(lambda trial: objective_params(trial, X_train, X_valid, y_train, y_valid, train_data['Close']), n_trials=1)
         study.trials_dataframe().fillna(0).sort_values('values_0').to_csv(f'hypertuning{idx}.csv')
