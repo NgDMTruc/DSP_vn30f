@@ -181,7 +181,7 @@ def objective(trial, X_train, X_valid, y_train, y_valid, y_price):
         if t.state != optuna.trial.TrialState.COMPLETE:
             continue
         if t.params == trial.params:
-            return None # t.values  # Return the previous value without re-evaluating i
+            return np.nan # t.values  # Return the previous value without re-evaluating i
 
     trade_threshold  = 0.0001
 
@@ -212,5 +212,5 @@ unique_trials = 200
 
 while unique_trials > len(set(str(t.params) for t in study.trials)):
     study.optimize(lambda trial: objective(trial, X_train, X_valid, y_train, y_valid, train_data['Close']), n_trials=1)
-    study.trials_dataframe().sort_values('values_0').to_csv('xgb_feature_trials.csv')
+    study.trials_dataframe().fillna(0).sort_values('values_0').to_csv('xgb_feature_trials.csv')
     joblib.dump(study, 'xgbmodel.pkl')

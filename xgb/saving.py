@@ -210,6 +210,15 @@ def split_optuna_data(data):
 
         return X_train, X_valid, y_train, y_valid
 
+def return_result_df(hold_out, y_hold_out, data, train_data, pos, pnl):
+    result = pd.DataFrame()
+    result['Close_Holdout'] = hold_out['Close']
+    result['Ground_value_Holdout'] = hold_out['Return']
+    result['Predict_diff_Holdout'] = pd.Series(y_hold_out, index=data.index[len(train_data):len(data)])
+    result['Position_predict_Holdout'] = pd.Series(pos, index=data.index[len(train_data):len(data)])
+    result['PNL_Holdout'] = pd.Series(pnl)
+    return result
+
 data = pd.read_csv('save_data.csv')
 
 train_data, hold_out = split_data(data)
@@ -217,105 +226,54 @@ train_data, hold_out = split_data(data)
 with open('top_10_list.pkl', 'rb') as f:
     selected_columns_cluster = pickle.load(f)
 
-min_delta = 0.0001
-patience = 30
+with open('top_10_features_per_cluster.pkl', 'rb') as f:
+    top_10_features_per_cluster = pickle.load(f)
 
-class CustomEarlyStopping(callback.TrainingCallback):
-    def __init__(self, min_delta, patience, verbose=False):
-        super().__init__()
-        self.min_delta = min_delta
-        self.patience = patience
-        self.verbose = verbose
-        self.best_score = np.inf
-        self.wait = 0
-        self.stopped_epoch = 0
+with open('best_params_list.pkl', 'rb') as f:
+    best_params_list = pickle.load(f)
 
-    def after_iteration(self, model, epoch, evals_log):
-        if not evals_log:
-            return False
-        metric_name = next(iter(evals_log['validation_0']))
-        score = evals_log['validation_0'][metric_name][-1]
-        if score < (self.best_score - self.min_delta):
-            self.best_score = score
-            self.wait = 0
-        else:
-            self.wait += 1
-            if self.wait >= self.patience:
-                if self.verbose:
-                    print(f"\nStopping. Best score: {self.best_score}")
-                self.stopped_epoch = epoch
-                return True
-        return False
-
-    def get_best_score(self):
-        return self.best_score
-    
-def objective_params(trial, X_train, X_valid, y_train, y_valid, y_close):
-    # Define the hyperparameter search space
-    params = {
-        'max_depth': trial.suggest_int('max_depth', 3, 12),
-        'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1),
-        'n_estimators': 8000,  # does not matter, think of it as max epochs, and we stop the model based on early stopping, so any extremely high number works
-        'min_child_weight': trial.suggest_int('min_child_weight', 1, 10),  # can't comment, never played with that
-        'subsample': trial.suggest_float('subsample', 0.5, 1.0),  # you dont want to sample less than 50% of your data
-        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.3, 1.0),  # you dont want to sample less than 30% of your features pr boosting round
-        }
-    trade_threshold  = 0.005
-
-    # Check duplication and skip if it's detected.
-    for t in trial.study.trials:
-        if t.state != optuna.trial.TrialState.COMPLETE:
-            continue
-        if t.params == trial.params:
-            return np.nan #t.values  # Return the previous value without re-evaluating i
-
-    custom_early_stopping_instance = CustomEarlyStopping(min_delta=min_delta, patience=patience, verbose=True)
-
-    # Train the model
-    model = xgb.XGBRegressor(**params)
-    model.fit(X_train, y_train, callbacks=[custom_early_stopping_instance])
-
-    y_pred_train = model.predict(X_train)
-    y_pred_valid = model.predict(X_valid)
-
-    pos, pnl, daily_pnl, sharpe_is = sharpe_for_vn30f(y_pred_train, y_close[:len(y_pred_train)], trade_threshold=trade_threshold, fee_perc=0.01, periods=10)
-    _, _, _, sharpe_oos = sharpe_for_vn30f(y_pred_valid, y_close[len(y_pred_train):], trade_threshold=trade_threshold, fee_perc=0.01, periods=10)
-
-    return sharpe_oos, abs((abs(sharpe_is / sharpe_oos))-1)
-
-best_params_list = []
 for idx, data_item in enumerate(selected_columns_cluster):
     train_cols, _ = split_data(data_item)
     optuna_data = scale_data(train_cols)
 
-    X_train, X_valid, y_train, y_valid = train_test_split(optuna_data,
-                                                            train_data['Return'],
-                                                            test_size=0.5,
-                                                            shuffle=False)
-    study = optuna.create_study(directions=['maximize', 'minimize'])
 
-    unique_trials = 10
-    while unique_trials > len(set(str(t.params) for t in study.trials)):
-        study.optimize(lambda trial: objective_params(trial, X_train, X_valid, y_train, y_valid, train_data['Close']), n_trials=1)
-        study.trials_dataframe().fillna(0).sort_values('values_0').to_csv(f'hypertuning{idx}.csv')
-        joblib.dump(study, f'{unique_trials}hypertuningcluster{idx}.pkl')
+pnl_data = []
+sharpe_list = []
+result = None
+trade_threshold  = 0.0005
 
-    # Retrieve all trials
-    trials = study.trials
+# Create a single figure and set of subplots
+fig, axes = plt.subplots(len(selected_columns_cluster), figsize=(10, 12))
 
-    completed_trials = [t for t in study.trials if t.values is not None]
+for idx, data_item in enumerate(selected_columns_cluster):
+    _, hold_out_cols = split_data(data_item)
 
-    # Sort trials based on objective values
-    completed_trials.sort(key=lambda trial: trial.values, reverse=True)
+    xbg_reg = xgb.XGBRegressor()
+    # Create and train model
+    xbg_reg.load_model(f"best_in_cluster_{idx}.json")
 
-    # Select top 1 trials
-    params = completed_trials[0].params
-    best_params_list.append(params)
+    # Make predictions
+    hold_out_cols.columns = optuna_data.columns
+    y_hold_out = xbg_reg.predict(hold_out_cols)
+    pos, pnl, daily, sharpe = sharpe_for_vn30f(y_hold_out, hold_out['Return'], trade_threshold=trade_threshold, fee_perc=0.01, periods=10)
 
-    model = xgb.XGBRegressor(**params)
-    model.fit(X_train, y_train)
+    print(f"Pnl ratio for cluster {idx}: {pnl}")
+    # Append PnL data to the list
+    pnl_data.append(pnl)
+    result = return_result_df(hold_out, y_hold_out, data, train_data, pos, pnl)
+    sharpe_list.append(sharpe)
 
-    model.save_model(f'best_in_cluster_{idx}.json')
+#Top 10 feature into list
+feature=[]
+for i in top_10_features_per_cluster:
+    listToStr = ' '.join([str(elem) for elem in i])
+    feature.append(listToStr)
 
-with open('best_params_list.pkl', 'wb') as f:
-    pickle.dump(best_params_list, f)
+name=[]
+for i in range(len(selected_columns_cluster)):
+  name.append( 'Cluster '+ str(i))
+
+dict = {'Top 10 Feature' : feature, 'Best params': best_params_list, 'Best sharpe':sharpe_list}
+df_result = pd.DataFrame(dict, index=name)
+df_result.to_csv('xgb_result.csv')
+

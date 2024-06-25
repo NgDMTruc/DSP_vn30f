@@ -402,6 +402,10 @@ for item in top_10_features_per_cluster:
   selected_columns_cluster.append(selected_columns) 
 
 # Save to disk
+with open('top_10_features_per_cluster.pkl', 'wb') as f:
+    pickle.dump(top_10_features_per_cluster, f)
+
+# Save to disk
 with open('top_10_list.pkl', 'wb') as f:
     pickle.dump(selected_columns_cluster, f)
 
