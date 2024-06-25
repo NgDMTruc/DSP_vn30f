@@ -149,13 +149,13 @@ data = pd.read_csv('save_data.csv')
 study = joblib.load(open("xgbmodel.pkl", "rb"))
 trials = study.trials
 
-completed_trials = [t for t in study.trials if t.values is not None]
+completed_trials = [t for t in study.trials if t.values is not None] #completed_trials = [t for t in study.trials if t.values is not None and not np.isnan(t.values)]
 
 # Sort the completed trials based on their objective values
 completed_trials.sort(key=lambda trial: trial.values, reverse=True)
 
 # Define top pnl to take for clustering
-top_trials = completed_trials
+top_trials = completed_trials[:200]
 
 new_df_no_close_col = data.drop(['Date','time', 'Open','High','Low','Close','Volume', 'Return' ], axis=1)
 
@@ -191,30 +191,30 @@ for best_selected_features in top_features_list:
     pnl_valid_no_nan = np.nan_to_num(pnl_valid, nan=0)
     top_pnl.append(pnl_valid_no_nan)
 
-pnl = pd.DataFrame(top_pnl)
-pnl = pnl.transpose()
+# pnl = pd.DataFrame(top_pnl)
+# pnl = pnl.transpose()
 
-# Calculate the correlation matrix
-corr_matrix = pnl.corr().abs()
+# # Calculate the correlation matrix
+# corr_matrix = pnl.corr().abs()
 
-# Create a mask to only look at the upper triangle (to avoid duplicate checks)
-upper_triangle_mask = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+# # Create a mask to only look at the upper triangle (to avoid duplicate checks)
+# upper_triangle_mask = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
 
-# Identify columns to drop
-to_drop = [column for column in upper_triangle_mask.columns if any(upper_triangle_mask[column] > 0.8)]
+# # Identify columns to drop
+# to_drop = [column for column in upper_triangle_mask.columns if any(upper_triangle_mask[column] > 0.9)]
 
-# Drop the columns with high correlation
-pnl_dropped = pnl.drop(columns=to_drop)
+# # Drop the columns with high correlation
+# pnl_dropped = pnl.drop(columns=to_drop)
 
-pnl_array = np.array(pnl_dropped.transpose())
+# pnl_array = np.array(pnl_dropped.transpose())
 
-# Identify columns with all zero values
-cols_to_keep = ~np.all(pnl_array == 0, axis=0)
+# # Identify columns with all zero values
+# cols_to_keep = ~np.all(pnl_array == 0, axis=0)
 
 # Drop columns with all zero values
 #pnl_array = pnl_array[:, cols_to_keep]
 
-pnl_array = pnl_array[:100]
+# pnl_array = pnl_array[:100]
 
 """# ONC"""
 
@@ -325,7 +325,7 @@ def clusterKMeansTop(corr0: pd.DataFrame, maxNumClusters=None, n_init=10):
             #return corr1, clstrs, silh, stat
 
 # FREQUENCY FEATURE TABLE
-correlation_matrix = np.corrcoef(pnl_array)
+correlation_matrix = np.corrcoef(top_pnl) #pnl_array
 corr = pd.DataFrame(correlation_matrix)
 
 corr= corr.fillna(0)
