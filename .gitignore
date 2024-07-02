@@ -1,0 +1,15 @@
+# Ignore CSV files
+*.csv
+
+# Ignore PKL files
+*.pkl
+*.json
+
+# Optional: Ignore other common data and environment files
+*.log
+*.env
+*.sqlite
+*.db
+__pycache__/
+*.pyc
+.DS_Store
