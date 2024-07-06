@@ -2,10 +2,9 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_samples, silhouette_score
 from sklearn.utils import check_random_state
 from sklearn.preprocessing import StandardScaler
-from xgboost import callback
+from sklearn.linear_model import Ridge
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
-import xgboost as xgb
 import pandas as pd
 import numpy as np
 import optuna
@@ -225,19 +224,14 @@ data = full_data[full_data.Date >= '2021']
 
 train_data, hold_out = split_data(data)
 
-with open('top_10_list.pkl', 'rb') as f:
+with open(r'D:\Study file\Summer 2024\DSP\DSP_vn30f\ridge\top_10_list_ridge.pkl', 'rb') as f:
     selected_columns_cluster = pickle.load(f)
 
-with open('top_10_features_per_cluster.pkl', 'rb') as f:
+with open(r'D:\Study file\Summer 2024\DSP\DSP_vn30f\ridge\top_10_features_per_cluster_ridge.pkl', 'rb') as f:
     top_10_features_per_cluster = pickle.load(f)
 
-with open('best_params_list.pkl', 'rb') as f:
+with open(r'D:\Study file\Summer 2024\DSP\DSP_vn30f\ridge\best_params_list_ridge.pkl', 'rb') as f:
     best_params_list = pickle.load(f)
-
-for idx, data_item in enumerate(selected_columns_cluster):
-    train_cols, _ = split_data(data_item)
-    optuna_data = scale_data(train_cols)
-
 
 pnl_data = []
 sharpe_list = []
@@ -248,11 +242,15 @@ trade_threshold  = 0.0005
 fig, axes = plt.subplots(len(selected_columns_cluster), figsize=(10, 12))
 
 for idx, data_item in enumerate(selected_columns_cluster):
-    _, hold_out_cols = split_data(data_item[-data.shape[0]:])
+    train_cols, _ = split_data(data_item)
+    optuna_data = scale_data(train_cols)
 
-    xbg_reg = xgb.XGBRegressor()
+    _, hold_out_cols = split_data(data_item[-data.shape[0]:])
+    hold_out_cols = scale_data(hold_out_cols)
+
+    xbg_reg = Ridge()
     # Create and train model
-    xbg_reg.load_model(f"best_in_cluster_{idx}.json")
+    xbg_reg=joblib.load(fr"D:\Study file\Summer 2024\DSP\DSP_vn30f\ridge\ridge_best_in_cluster_{idx}.pkl")
 
     # Make predictions
     hold_out_cols.columns = optuna_data.columns
@@ -277,5 +275,5 @@ for i in range(len(selected_columns_cluster)):
 
 dict = {'Top 10 Feature' : feature, 'Best params': best_params_list, 'Best sharpe':sharpe_list}
 df_result = pd.DataFrame(dict, index=name)
-df_result.to_csv('xgb_result.csv')
+df_result.to_csv('ridge_result.csv')
 
